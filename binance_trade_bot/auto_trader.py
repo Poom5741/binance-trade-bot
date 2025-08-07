@@ -1,6 +1,7 @@
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 
+import pandas as pd
 from sqlalchemy.orm import Session
 
 from .binance_api_manager import BinanceAPIManager
@@ -8,6 +9,7 @@ from .config import Config
 from .database import Database
 from .logger import Logger
 from .models import Coin, CoinValue, Pair
+from .technical_analysis import WmaEngine
 
 
 class AutoTrader:
@@ -22,9 +24,126 @@ class AutoTrader:
         self.db = database
         self.logger = logger
         self.config = config
+        
+        # Initialize WMA engine for technical analysis
+        self.wma_engine = self._initialize_wma_engine()
 
     def initialize(self):
         self.initialize_trade_thresholds()
+    
+    def _initialize_wma_engine(self) -> Optional[WmaEngine]:
+        """
+        Initialize the WMA engine with configuration settings.
+        
+        @description Create and configure WMA engine for technical analysis
+        @returns {WmaEngine|null} Initialized WMA engine or None if configuration fails
+        """
+        try:
+            wma_config = {
+                'wma_short_period': self.config.get('wma_short_period', 7),
+                'wma_long_period': self.config.get('wma_long_period', 21),
+                'price_column': 'close'
+            }
+            
+            # Validate WMA configuration
+            if wma_config['wma_short_period'] <= 0 or wma_config['wma_long_period'] <= 0:
+                self.logger.warning("Invalid WMA configuration detected, using defaults")
+                wma_config = {'wma_short_period': 7, 'wma_long_period': 21, 'price_column': 'close'}
+            
+            if wma_config['wma_short_period'] >= wma_config['wma_long_period']:
+                self.logger.warning("WMA short period must be less than long period, using defaults")
+                wma_config = {'wma_short_period': 7, 'wma_long_period': 21, 'price_column': 'close'}
+            
+            return WmaEngine(wma_config)
+            
+        except Exception as e:
+            self.logger.error(f"Failed to initialize WMA engine: {e}")
+            return None
+    
+    def _get_historical_data(self, symbol: str, periods: int = 50) -> Optional[pd.DataFrame]:
+        """
+        Get historical price data for WMA analysis.
+        
+        @description Fetch historical market data for technical analysis
+        @param {str} symbol - Trading symbol (e.g., 'BTCUSDT')
+        @param {int} periods - Number of periods to fetch
+        @returns {DataFrame|null} Historical data or None if fetch fails
+        """
+        try:
+            # Get klines/candlestick data
+            klines = self.manager.get_klines(symbol, limit=periods)
+            
+            if not klines or len(klines) < periods:
+                self.logger.warning(f"Insufficient historical data for {symbol}")
+                return None
+            
+            # Convert to DataFrame
+            df_data = {
+                'open': [float(k[1]) for k in klines],
+                'high': [float(k[2]) for k in klines],
+                'low': [float(k[3]) for k in klines],
+                'close': [float(k[4]) for k in klines],
+                'volume': [float(k[5]) for k in klines]
+            }
+            
+            return pd.DataFrame(df_data)
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get historical data for {symbol}: {e}")
+            return None
+    
+    def _calculate_wma_signal_score(self, pair: Pair, coin_price: float) -> float:
+        """
+        Calculate WMA-based signal score for trade opportunity.
+        
+        @description Analyze WMA indicators and generate trade opportunity score
+        @param {Pair} pair - Trading pair
+        @param {float} coin_price - Current coin price
+        @returns {float} Signal score between -1.0 (bearish) and 1.0 (bullish)
+        """
+        if not self.wma_engine:
+            return 0.0
+        
+        try:
+            # Get historical data for the pair
+            symbol = pair.to_coin + self.config.BRIDGE
+            historical_data = self._get_historical_data(symbol, self.wma_engine.long_period + 10)
+            
+            if historical_data is None or len(historical_data) < self.wma_engine.long_period:
+                self.logger.warning(f"Insufficient data for WMA analysis on {symbol}")
+                return 0.0
+            
+            # Perform WMA analysis
+            trend_analysis = self.wma_engine.detect_trend(historical_data)
+            
+            if trend_analysis['trend'] == 'insufficient_data':
+                return 0.0
+            
+            # Calculate signal score based on trend strength and direction
+            signal_score = 0.0
+            
+            if trend_analysis['trend'] == 'bullish':
+                # Positive score for bullish trend
+                signal_score = trend_analysis['trend_strength']
+                
+                # Bonus for golden cross
+                if trend_analysis['crossover_signal'] == 'golden_cross':
+                    signal_score += 0.3
+                    
+            elif trend_analysis['trend'] == 'bearish':
+                # Negative score for bearish trend
+                signal_score = -trend_analysis['trend_strength']
+                
+                # Penalty for death cross
+                if trend_analysis['crossover_signal'] == 'death_cross':
+                    signal_score -= 0.3
+            
+            # Ensure score is within valid range
+            return max(-1.0, min(1.0, signal_score))
+            
+        except Exception as e:
+            self.logger.error(f"Failed to calculate WMA signal score for {pair.to_coin}: {e}")
+            return 0.0
 
     def transaction_through_bridge(self, pair: Pair):
         """
@@ -106,6 +225,7 @@ class AutoTrader:
     def _get_ratios(self, coin: Coin, coin_price):
         """
         Given a coin, get the current price ratio for every other enabled coin
+        incorporating WMA trend signals for enhanced trading decisions.
         """
         ratio_dict: Dict[Pair, float] = {}
 
@@ -126,15 +246,58 @@ class AutoTrader:
             to_fee = self.manager.get_fee(pair.to_coin, self.config.BRIDGE, False)
             transaction_fee = from_fee + to_fee - from_fee * to_fee
 
+            # Calculate base ratio using existing logic
             if self.config.USE_MARGIN == "yes":
-                ratio_dict[pair] = (
+                base_ratio = (
                     (1 - transaction_fee) * coin_opt_coin_ratio / pair.ratio - 1 - self.config.SCOUT_MARGIN / 100
                 )
             else:
-                ratio_dict[pair] = (
+                base_ratio = (
                     coin_opt_coin_ratio - transaction_fee * self.config.SCOUT_MULTIPLIER * coin_opt_coin_ratio
                 ) - pair.ratio
+
+            # Apply WMA-based signal enhancement if WMA engine is available
+            enhanced_ratio = self._apply_wma_signal_enhancement(pair, base_ratio)
+
+            ratio_dict[pair] = enhanced_ratio
         return ratio_dict
+    
+    def _apply_wma_signal_enhancement(self, pair: Pair, base_ratio: float) -> float:
+        """
+        Apply WMA signal enhancement to trading ratio calculation.
+        
+        @description Enhance base ratio with WMA trend signals for better trading decisions
+        @param {Pair} pair - Trading pair being analyzed
+        @param {float} base_ratio - Base calculated ratio
+        @returns {float} Enhanced ratio incorporating WMA signals
+        """
+        # Fallback to base ratio if WMA engine is not available
+        if not self.wma_engine:
+            self.logger.debug("WMA engine not available, using base ratio")
+            return base_ratio
+        
+        try:
+            # Calculate WMA signal score
+            wma_signal_score = self._calculate_wma_signal_score(pair, base_ratio)
+            
+            # Apply signal enhancement with configurable weight
+            wma_weight = self.config.get('wma_signal_weight', 0.3)  # Default 30% weight
+            enhanced_ratio = base_ratio * (1 + wma_signal_score * wma_weight)
+            
+            # Log the enhancement for debugging
+            if abs(wma_signal_score) > 0.1:  # Log significant signals
+                self.logger.info(
+                    f"WMA enhancement for {pair.from_coin}->{pair.to_coin}: "
+                    f"base_ratio={base_ratio:.4f}, wma_score={wma_signal_score:.3f}, "
+                    f"enhanced_ratio={enhanced_ratio:.4f}"
+                )
+            
+            return enhanced_ratio
+            
+        except Exception as e:
+            self.logger.error(f"Failed to apply WMA enhancement for {pair}: {e}")
+            # Fallback to base ratio on error
+            return base_ratio
 
     def _jump_to_best_coin(self, coin: Coin, coin_price: float):
         """

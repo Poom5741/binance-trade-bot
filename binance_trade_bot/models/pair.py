@@ -17,6 +17,10 @@ class Pair(Base):
     to_coin = relationship("Coin", foreign_keys=[to_coin_id], lazy="joined")
 
     ratio = Column(Float)
+    
+    # New fields for WMA trend score and AI adjustment factor
+    wma_trend_score = Column(Float, nullable=True)
+    ai_adjustment_factor = Column(Float, nullable=True)
 
     enabled = column_property(
         select([func.count(Coin.symbol) == 2])
@@ -38,4 +42,6 @@ class Pair(Base):
             "from_coin": self.from_coin.info(),
             "to_coin": self.to_coin.info(),
             "ratio": self.ratio,
+            "wma_trend_score": self.wma_trend_score,
+            "ai_adjustment_factor": self.ai_adjustment_factor,
         }

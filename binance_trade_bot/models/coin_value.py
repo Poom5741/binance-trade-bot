@@ -31,6 +31,10 @@ class CoinValue(Base):
     interval = Column(Enum(Interval))
 
     datetime = Column(DateTime)
+    
+    # New fields for daily change percentage and risk score
+    daily_change_percentage = Column(Float, nullable=True)
+    risk_score = Column(Float, nullable=True)
 
     def __init__(
         self,
@@ -74,4 +78,6 @@ class CoinValue(Base):
             "usd_value": self.usd_value,
             "btc_value": self.btc_value,
             "datetime": self.datetime.isoformat(),
+            "daily_change_percentage": self.daily_change_percentage,
+            "risk_score": self.risk_score,
         }
