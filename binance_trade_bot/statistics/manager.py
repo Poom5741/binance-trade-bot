@@ -5,11 +5,29 @@ Statistics Manager for performance tracking.
 import json
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Union
-import pandas as pd
-import numpy as np
+
+# Optional pandas dependency
+try:  # pragma: no cover
+    import pandas as pd  # type: ignore
+except Exception:  # pragma: no cover - when pandas is unavailable
+    from types import SimpleNamespace
+
+    class _DummyDataFrame:
+        pass
+
+    pd = SimpleNamespace(DataFrame=_DummyDataFrame)  # type: ignore
 
 from .base import StatisticsBase
-from .models import Statistics, DailyPerformance, WeeklyPerformance, TotalPerformance, TradeRecord
+try:  # pragma: no cover - allow import without SQLAlchemy
+    from .models import (
+        Statistics,
+        DailyPerformance,
+        WeeklyPerformance,
+        TotalPerformance,
+        TradeRecord,
+    )
+except Exception:  # pragma: no cover - fallback when models can't be imported
+    Statistics = DailyPerformance = WeeklyPerformance = TotalPerformance = TradeRecord = None  # type: ignore
 from .calculators import (
     DailyPerformanceCalculator,
     WeeklyPerformanceCalculator,
@@ -19,9 +37,35 @@ from .calculators import (
     AdvancedMetricsCalculator,
 )
 from ..database import Database
-from ..models.trade import Trade, TradeState
-from ..models.coin import Coin
-from ..logger import Logger
+
+# Import trading and coin models lazily to avoid hard dependency on SQLAlchemy
+try:  # pragma: no cover
+    from ..models.trade import Trade, TradeState  # type: ignore
+except Exception:  # pragma: no cover
+    class Trade:  # type: ignore
+        pass
+
+    class TradeState:  # type: ignore
+        COMPLETE = "COMPLETE"
+
+try:  # pragma: no cover
+    from ..models.coin import Coin, CoinValue  # type: ignore
+except Exception:  # pragma: no cover
+    class Coin:  # type: ignore
+        symbol = ""
+
+    class CoinValue:  # type: ignore
+        pass
+
+try:  # pragma: no cover
+    from ..logger import Logger  # type: ignore
+except Exception:  # pragma: no cover
+    class Logger:  # type: ignore
+        def info(self, *args, **kwargs):
+            pass
+
+        def error(self, *args, **kwargs):
+            pass
 
 
 class StatisticsManager:

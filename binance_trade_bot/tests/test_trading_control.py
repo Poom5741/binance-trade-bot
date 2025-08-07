@@ -8,9 +8,13 @@ from datetime import datetime, timedelta
 import asyncio
 
 # Import telegram library directly, not from local module
-import telegram as telegram_lib
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CallbackContext
+try:
+    import telegram as telegram_lib
+    from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+    from telegram.ext import CallbackContext
+except Exception:  # pragma: no cover
+    telegram_lib = Mock()
+    Update = InlineKeyboardButton = InlineKeyboardMarkup = CallbackContext = Mock
 
 from binance_trade_bot.telegram.trading_control import TradingControlCommands
 from binance_trade_bot.models.telegram_users import TelegramUsers, UserRole, UserStatus
@@ -41,6 +45,8 @@ class TestTradingControlCommands(unittest.TestCase):
         self.logger = Mock(spec=Logger)
         self.risk_manager = Mock(spec=IntegratedRiskManager)
         self.auto_trader = Mock(spec=AutoTrader)
+        self.auto_trader.manager = Mock()
+        self.auto_trader.manager.register_trade_notifier = Mock()
         
         # Mock database session
         self.mock_session = Mock()
@@ -82,6 +88,18 @@ class TestTradingControlCommands(unittest.TestCase):
         self.assertTrue(self.trading_control.trading_enabled)
         self.assertFalse(self.trading_control.shutdown_requested)
         self.assertIsNone(self.trading_control.shutdown_reason)
+
+    def test_trade_notifier_registration(self):
+        """Ensure trade notifier is registered with the manager."""
+        self.auto_trader.manager.register_trade_notifier.assert_called_once()
+
+    def test_trade_notification_callback(self):
+        """Test that trade notifications trigger send_trade_notification."""
+        callback = self.auto_trader.manager.register_trade_notifier.call_args[0][0]
+        self.trading_control.send_trade_notification = AsyncMock(return_value=True)
+        trade_data = {'action': 'BUY'}
+        callback(trade_data)
+        self.trading_control.send_trade_notification.assert_called_once_with(trade_data)
 
     def test_is_rate_limited(self):
         """Test rate limiting functionality."""

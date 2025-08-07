@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Any, Tuple, Union
 from enum import Enum
 import logging
 import json
+from pathlib import Path
 
 from .base import AIAdapterBase
 from ..database import Database
@@ -21,6 +22,7 @@ from ..models.pair import Pair
 from ..models.ai_parameters import AiParameters, ParameterType, ParameterStatus
 from ..statistics.manager import StatisticsManager
 from ..logger import Logger
+from ..state_persistence import StatePersistence
 
 
 class ParameterBoundType(Enum):
@@ -101,8 +103,9 @@ class AdaptiveParameterAdjuster(AIAdapterBase):
         }
     }
     
-    def __init__(self, config: Dict[str, Any], database: Database, 
-                 statistics_manager: StatisticsManager, logger: Logger):
+    def __init__(self, config: Dict[str, Any], database: Database,
+                 statistics_manager: StatisticsManager, logger: Logger,
+                 state_persistence: Optional[StatePersistence] = None):
         """
         Initialize the adaptive parameter adjuster.
         
@@ -115,6 +118,10 @@ class AdaptiveParameterAdjuster(AIAdapterBase):
         self.database = database
         self.statistics_manager = statistics_manager
         self.logger = logger
+
+        # Optional persistence for learning parameters
+        path = Path(config.get('learning_state_path', 'ai_learning_state.json'))
+        self.state_persistence = state_persistence or StatePersistence(path)
         
         # Parameter bounds configuration
         self.parameter_bounds = config.get('parameter_bounds', self.DEFAULT_PARAMETER_BOUNDS)
@@ -141,6 +148,7 @@ class AdaptiveParameterAdjuster(AIAdapterBase):
         self.parameter_history = []
         self.performance_tracking = {}
         self.learning_model_state = {}
+        self._restore_learning_state()
         
         self.logger.info("Adaptive Parameter Adjuster initialized")
     
@@ -178,12 +186,28 @@ class AdaptiveParameterAdjuster(AIAdapterBase):
             
             self.is_trained = True
             self.logger.info(f"Model training completed. Extracted {len(performance_patterns)} performance patterns")
-            
+
+            self.save_learning_state()
             return True
             
         except Exception as e:
             self.logger.error(f"Error during model training: {str(e)}")
             return False
+
+    def _restore_learning_state(self) -> None:
+        """Load any previously saved learning state."""
+        data = self.state_persistence.load() if self.state_persistence else {}
+        self.learning_model_state = data.get('learning_model_state', {})
+        self.parameter_history = data.get('parameter_history', [])
+
+    def save_learning_state(self) -> None:
+        """Persist current learning parameters to disk."""
+        if not self.state_persistence:
+            return
+        self.state_persistence.save({
+            'learning_model_state': self.learning_model_state,
+            'parameter_history': self.parameter_history,
+        })
     
     def predict(self, input_data: pd.DataFrame) -> Dict[str, Any]:
         """

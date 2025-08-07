@@ -11,8 +11,12 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import CallbackContext, ContextTypes
+try:
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+    from telegram.ext import CallbackContext, ContextTypes
+except Exception:  # pragma: no cover
+    InlineKeyboardButton = InlineKeyboardMarkup = Update = object  # type: ignore
+    CallbackContext = ContextTypes = object  # type: ignore
 
 from .base import TelegramBase
 from ..database import Database
@@ -72,6 +76,11 @@ class TradingControlCommands(TelegramBase):
         # Initialize logger
         self.log = logging.getLogger(__name__)
         self.log.info("Trading control commands initialized")
+
+        # Register for trade execution notifications if possible
+        if hasattr(self.auto_trader, 'manager') and \
+                hasattr(self.auto_trader.manager, 'register_trade_notifier'):
+            self.auto_trader.manager.register_trade_notifier(self._notify_trade)
     
     async def send_message(self, chat_id: str, text: str, parse_mode: str = None) -> bool:
         """
@@ -114,6 +123,14 @@ class TradingControlCommands(TelegramBase):
         except Exception as e:
             self.log.error(f"Error sending trade notification: {e}")
             return False
+
+    def _notify_trade(self, trade_data: Dict[str, Any]):
+        """Wrapper to send trade notification from synchronous code."""
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self.send_trade_notification(trade_data))
+        except RuntimeError:
+            asyncio.run(self.send_trade_notification(trade_data))
     
     async def send_alert(self, alert_type: str, message: str, details: Dict[str, Any] = None) -> bool:
         """

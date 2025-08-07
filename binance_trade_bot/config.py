@@ -23,6 +23,8 @@ class Config:  # pylint: disable=too-few-public-methods,too-many-instance-attrib
             "strategy": "default",
             "sell_timeout": "0",
             "buy_timeout": "0",
+            "backup_interval": "3600",
+            "backup_dir": "backups",
         }
 
         if not os.path.exists(CFG_FL_NAME):
@@ -75,3 +77,11 @@ class Config:  # pylint: disable=too-few-public-methods,too-many-instance-attrib
 
         self.USE_MARGIN = os.environ.get("USE_MARGIN") or config.get(USER_CFG_SECTION, "use_margin")
         self.SCOUT_MARGIN = float(os.environ.get("SCOUT_MARGIN") or config.get(USER_CFG_SECTION, "scout_margin"))
+
+        # Backup configuration
+        self.BACKUP_INTERVAL = int(
+            os.environ.get("BACKUP_INTERVAL") or config.get(USER_CFG_SECTION, "backup_interval")
+        )
+        self.BACKUP_DIR = os.environ.get("BACKUP_DIR") or config.get(USER_CFG_SECTION, "backup_dir")
+        if self.BACKUP_INTERVAL <= 0:
+            raise ValueError("BACKUP_INTERVAL must be positive")

@@ -3,7 +3,14 @@ Unit tests for Adaptive Parameter Adjuster.
 """
 
 import unittest
-import pandas as pd
+import pytest
+
+try:
+    import pandas as pd  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    pd = None  # type: ignore
+    pytest.skip("pandas not installed", allow_module_level=True)
+
 import numpy as np
 from datetime import datetime, timedelta
 from unittest.mock import Mock, patch, MagicMock
@@ -685,7 +692,7 @@ class TestAdaptiveParameterAdjuster(unittest.TestCase):
         self.assertIn('sma_50', result.columns)
         self.assertIn('rsi', result.columns)
         self.assertIn('macd', result.columns)
-    
+
     def _create_mock_trades(self, count):
         """Create mock trades for testing."""
         mock_trades = []
@@ -700,6 +707,38 @@ class TestAdaptiveParameterAdjuster(unittest.TestCase):
             mock_trades.append(trade)
         
         return mock_trades
+
+    def test_learning_state_persistence(self):
+        """Ensure learning state is saved and restored."""
+        import tempfile
+        from pathlib import Path
+        from binance_trade_bot.state_persistence import StatePersistence
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "ai_state.json"
+            persistence = StatePersistence(path)
+            adjuster = AdaptiveParameterAdjuster(
+                self.config,
+                self.mock_database,
+                self.mock_statistics_manager,
+                self.mock_logger,
+                state_persistence=persistence,
+            )
+
+            adjuster.learning_model_state = {"foo": 1}
+            adjuster.parameter_history = ["bar"]
+            adjuster.save_learning_state()
+
+            new_adjuster = AdaptiveParameterAdjuster(
+                self.config,
+                self.mock_database,
+                self.mock_statistics_manager,
+                self.mock_logger,
+                state_persistence=StatePersistence(path),
+            )
+
+            self.assertEqual(new_adjuster.learning_model_state, {"foo": 1})
+            self.assertEqual(new_adjuster.parameter_history, ["bar"])
 
 
 if __name__ == '__main__':

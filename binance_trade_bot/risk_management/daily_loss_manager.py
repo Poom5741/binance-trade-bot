@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from ..database import Database
 from ..models import DailyLossTracking, DailyLossStatus, CoinValue, Coin, Trade, TradeState
 from ..logger import Logger
+from .risk_event_logger import RiskEventLogger, RiskEventCategory
 
 
 class DailyLossManager:
@@ -31,17 +32,25 @@ class DailyLossManager:
     - Reset counters at midnight
     """
     
-    def __init__(self, database: Database, logger: Logger, config: Dict[str, Any]):
+    def __init__(
+        self,
+        database: Database,
+        logger: Logger,
+        config: Dict[str, Any],
+        risk_event_logger: Optional[RiskEventLogger] = None,
+    ):
         """
         Initialize the daily loss manager.
         
         @param {Database} database - Database instance
         @param {Logger} logger - Logger instance
         @param {Dict} config - Configuration dictionary
+        @param {RiskEventLogger} risk_event_logger - Optional risk event logger
         """
         self.database = database
         self.logger = logger
         self.config = config
+        self.risk_event_logger = risk_event_logger
         
         # Configuration parameters
         self.max_daily_loss_percentage = config.get('max_daily_loss_percentage', 5.0)
@@ -290,35 +299,58 @@ class DailyLossManager:
     def _create_risk_event(self, session: Session, tracking: DailyLossTracking):
         """
         Create a risk event when daily loss threshold is exceeded.
-        
+
         @param {Session} session - Database session
         @param {DailyLossTracking} tracking - Tracking record
         """
         try:
             from ..models import RiskEvent, RiskEventType, RiskEventSeverity, RiskEventStatus, Pair
-            
+
             # Create a risk event for the daily loss
             # Find a default pair for the event
             pair = session.query(Pair).first()
             if not pair:
                 pair = Pair(Coin("USDT", True), Coin("BTC", True))  # Default pair
                 session.add(pair)
-            
-            risk_event = RiskEvent(
-                pair=pair,
-                coin=pair.from_coin,  # Use from_coin as the main coin
-                event_type=RiskEventType.PORTFOLIO_LIMIT,
-                severity=RiskEventSeverity.HIGH,
-                trigger_value=tracking.daily_loss_percentage,
-                threshold_value=tracking.max_daily_loss_percentage,
-                current_value=tracking.daily_loss_percentage,
-                description=f"Daily loss threshold exceeded: {tracking.daily_loss_percentage:.2f}% (threshold: {tracking.max_daily_loss_percentage}%)",
-                created_by="daily_loss_manager"
+
+            description = (
+                f"Daily loss threshold exceeded: {tracking.daily_loss_percentage:.2f}% "
+                f"(threshold: {tracking.max_daily_loss_percentage}%)"
             )
-            
-            session.add(risk_event)
-            self.log.info(f"Created risk event for daily loss: {tracking.daily_loss_percentage:.2f}%")
-            
+
+            if self.risk_event_logger:
+                self.risk_event_logger.log_risk_event(
+                    session=session,
+                    pair=pair,
+                    coin=pair.from_coin,
+                    event_type=RiskEventType.PORTFOLIO_LIMIT,
+                    severity=RiskEventSeverity.HIGH,
+                    trigger_value=tracking.daily_loss_percentage,
+                    threshold_value=tracking.max_daily_loss_percentage,
+                    current_value=tracking.daily_loss_percentage,
+                    description=description,
+                    category=RiskEventCategory.PORTFOLIO_RISK,
+                    created_by="daily_loss_manager",
+                )
+            else:
+                risk_event = RiskEvent(
+                    pair=pair,
+                    coin=pair.from_coin,  # Use from_coin as the main coin
+                    event_type=RiskEventType.PORTFOLIO_LIMIT,
+                    severity=RiskEventSeverity.HIGH,
+                    trigger_value=tracking.daily_loss_percentage,
+                    threshold_value=tracking.max_daily_loss_percentage,
+                    current_value=tracking.daily_loss_percentage,
+                    description=description,
+                    created_by="daily_loss_manager",
+                )
+
+                session.add(risk_event)
+
+            self.log.info(
+                f"Created risk event for daily loss: {tracking.daily_loss_percentage:.2f}%"
+            )
+
         except Exception as e:
             self.log.error(f"Error creating risk event: {e}")
     
