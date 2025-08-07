@@ -3,7 +3,14 @@ Unit tests for Performance Pattern Analyzer.
 """
 
 import unittest
-import pandas as pd
+import pytest
+
+try:
+    import pandas as pd  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    pd = None  # type: ignore
+    pytest.skip("pandas not installed", allow_module_level=True)
+
 import numpy as np
 from datetime import datetime, timedelta
 from unittest.mock import Mock, patch, MagicMock

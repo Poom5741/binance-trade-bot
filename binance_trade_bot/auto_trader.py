@@ -10,6 +10,7 @@ from .database import Database
 from .logger import Logger
 from .models import Coin, CoinValue, Pair
 from .technical_analysis import WmaEngine
+from .decision_tracker import DecisionTracker
 
 
 class AutoTrader:
@@ -19,11 +20,15 @@ class AutoTrader:
         database: Database,
         logger: Logger,
         config: Config,
+        decision_tracker: Optional[DecisionTracker] = None,
     ):
         self.manager = binance_manager
         self.db = database
         self.logger = logger
         self.config = config
+
+        # Optional tracker for detailed decision/audit logging
+        self.decision_tracker = decision_tracker
         
         # Initialize WMA engine for technical analysis
         self.wma_engine = self._initialize_wma_engine()
@@ -160,12 +165,25 @@ class AutoTrader:
         else:
             self.logger.info("Skipping sell")
 
-        if can_sell and self.manager.sell_alt(pair.from_coin, self.config.BRIDGE) is None:
-            self.logger.info("Couldn't sell, going back to scouting mode...")
-            return None
+        if can_sell:
+            if self.decision_tracker:
+                self.decision_tracker.log_decision(
+                    "sell",
+                    pair.from_coin.symbol,
+                    "bridge transaction",
+                )
+            if self.manager.sell_alt(pair.from_coin, self.config.BRIDGE) is None:
+                self.logger.info("Couldn't sell, going back to scouting mode...")
+                return None
 
         result = self.manager.buy_alt(pair.to_coin, self.config.BRIDGE)
         if result is not None:
+            if self.decision_tracker:
+                self.decision_tracker.log_decision(
+                    "buy",
+                    pair.to_coin.symbol,
+                    "bridge transaction",
+                )
             self.db.set_current_coin(pair.to_coin)
             self.update_trade_threshold(pair.to_coin, result.price)
             return result

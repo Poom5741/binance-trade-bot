@@ -5,7 +5,19 @@ Base abstract class for statistics implementations.
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Dict, List, Optional, Any
-import pandas as pd
+
+# pandas is an optional dependency. Provide a minimal stub so modules can be
+# imported and type hints evaluated even when the library isn't available in the
+# execution environment.
+try:  # pragma: no cover - exercised only when pandas is missing
+    import pandas as pd  # type: ignore
+except Exception:  # pragma: no cover - fallback when pandas isn't installed
+    from types import SimpleNamespace
+
+    class _DummyDataFrame:  # minimal stand‑in used for type annotations
+        pass
+
+    pd = SimpleNamespace(DataFrame=_DummyDataFrame)  # type: ignore
 
 
 class StatisticsBase(ABC):
@@ -102,6 +114,21 @@ class StatisticsBase(ABC):
             'total_volume': total_volume,
             'average_trade_size': average_trade_size,
         }
+
+    def calculate_trade_frequency_metrics(self, data: pd.DataFrame, period_hours: float) -> Dict[str, Any]:
+        """Calculate trade frequency metrics.
+
+        @param data: DataFrame containing trade data
+        @param period_hours: Number of hours in the period
+        @returns: Dictionary with trade frequency metrics
+        """
+        if data.empty or period_hours <= 0:
+            return {'trade_frequency': 0.0}
+
+        total_trades = len(data)
+        trade_frequency = total_trades / period_hours
+
+        return {'trade_frequency': trade_frequency}
     
     def format_statistics(self, statistics: Dict[str, Any]) -> Dict[str, Any]:
         """

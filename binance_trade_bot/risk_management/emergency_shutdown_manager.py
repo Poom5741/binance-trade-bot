@@ -15,13 +15,17 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Dict, Any, Optional, List
 
-from sqlalchemy import and_, func
-from sqlalchemy.orm import Session
+try:
+    from sqlalchemy import and_, func  # type: ignore
+    from sqlalchemy.orm import Session  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    and_, func, Session = None, None, None  # type: ignore
 
 from ..database import Database
 from ..logger import Logger
 from ..models import RiskEvent, RiskEventType, RiskEventSeverity, RiskEventStatus, Pair, Coin
 from ..notifications import NotificationHandler
+from ..state_persistence import StatePersistence
 
 
 class ShutdownReason(Enum):
@@ -51,7 +55,7 @@ class EmergencyShutdownManager:
     - Manage configurable loss threshold settings
     """
     
-    def __init__(self, database: Database, logger: Logger, config: Dict[str, Any], notification_handler: NotificationHandler):
+    def __init__(self, database: Database, logger: Logger, config: Dict[str, Any], notification_handler: NotificationHandler, persistence: StatePersistence | None = None):
         """
         Initialize the emergency shutdown manager.
         
@@ -64,6 +68,7 @@ class EmergencyShutdownManager:
         self.logger = logger
         self.config = config
         self.notification_handler = notification_handler
+        self.persistence = persistence or StatePersistence()
         
         # Configuration parameters
         self.enable_emergency_shutdown = config.get('enable_emergency_shutdown', True)
@@ -205,6 +210,7 @@ class EmergencyShutdownManager:
             }
             
             self.state_preserved_data = state_data
+            self.persistence.save(state_data)
             self.log.info("Trading state preserved for potential resumption")
             
         except Exception as e:

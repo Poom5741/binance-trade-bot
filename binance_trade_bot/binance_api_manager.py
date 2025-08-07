@@ -1,7 +1,7 @@
 import math
 import time
 import traceback
-from typing import Dict, Optional
+from typing import Dict, Optional, Callable, Any
 
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
@@ -12,6 +12,7 @@ from .config import Config
 from .database import Database
 from .logger import Logger
 from .models import Coin
+from typing import Callable
 
 
 class BinanceAPIManager:
@@ -30,6 +31,9 @@ class BinanceAPIManager:
         self.stream_manager: Optional[BinanceStreamManager] = None
         self.setup_websockets()
 
+        # Optional trade notification callback
+        self._trade_notifier: Optional[Callable[[Dict[str, Any]], None]] = None
+
     def setup_websockets(self):
         self.stream_manager = BinanceStreamManager(
             self.cache,
@@ -37,6 +41,18 @@ class BinanceAPIManager:
             self.binance_client,
             self.logger,
         )
+
+    def register_trade_notifier(self, notifier: Callable[[Dict[str, Any]], None]):
+        """Register a callback to be notified on trade execution."""
+        self._trade_notifier = notifier
+
+    def _notify_trade(self, trade_data: Dict[str, Any]):
+        """Invoke trade notification callback if registered."""
+        if self._trade_notifier:
+            try:
+                self._trade_notifier(trade_data)
+            except Exception as exc:  # pylint: disable=broad-except
+                self.logger.error(f"Trade notifier error: {exc}")
 
     @cached(cache=TTLCache(maxsize=1, ttl=43200))
     def get_trade_fees(self) -> Dict[str, float]:
@@ -299,6 +315,16 @@ class BinanceAPIManager:
 
         trade_log.set_complete(order.cumulative_quote_qty)
 
+        trade_details = {
+            "action": "BUY",
+            "pair": f"{origin_symbol}{target_symbol}",
+            "price": from_coin_price,
+            "amount": order_quantity,
+            "timestamp": order.time / 1000 if hasattr(order, "time") else time.time(),
+            "status": getattr(order, "status", "COMPLETED"),
+        }
+        self._notify_trade(trade_details)
+
         return order
 
     def sell_alt(self, origin_coin: Coin, target_coin: Coin) -> BinanceOrder:
@@ -359,7 +385,16 @@ class BinanceAPIManager:
             new_balance = self.get_currency_balance(origin_symbol, True)
 
         self.logger.info(f"Sold {origin_symbol}")
-
         trade_log.set_complete(order.cumulative_quote_qty)
+
+        trade_details = {
+            "action": "SELL",
+            "pair": f"{origin_symbol}{target_symbol}",
+            "price": from_coin_price,
+            "amount": order_quantity,
+            "timestamp": order.time / 1000 if hasattr(order, "time") else time.time(),
+            "status": getattr(order, "status", "COMPLETED"),
+        }
+        self._notify_trade(trade_details)
 
         return order

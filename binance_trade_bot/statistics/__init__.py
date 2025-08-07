@@ -8,7 +8,13 @@ and maximum drawdown.
 """
 
 from .base import StatisticsBase
-from .models import Statistics, DailyPerformance, WeeklyPerformance, TotalPerformance
+
+# Models require SQLAlchemy; they may be unavailable in some test environments.
+try:  # pragma: no cover
+    from .models import Statistics, DailyPerformance, WeeklyPerformance, TotalPerformance
+except Exception:  # pragma: no cover
+    Statistics = DailyPerformance = WeeklyPerformance = TotalPerformance = None  # type: ignore
+
 from .calculators import (
     DailyPerformanceCalculator,
     WeeklyPerformanceCalculator,

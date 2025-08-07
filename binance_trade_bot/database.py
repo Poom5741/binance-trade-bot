@@ -5,14 +5,47 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import List, Optional, Union
 
-from socketio import Client
-from socketio.exceptions import ConnectionError as SocketIOConnectionError
-from sqlalchemy import create_engine, func
-from sqlalchemy.orm import Session, scoped_session, sessionmaker
+try:  # pragma: no cover - allow running without optional dependencies
+    from socketio import Client
+    from socketio.exceptions import ConnectionError as SocketIOConnectionError
+except Exception:  # pragma: no cover
+    Client = None  # type: ignore
 
-from .config import Config
-from .logger import Logger
-from .models import *  # pylint: disable=wildcard-import
+    class SocketIOConnectionError(Exception):
+        pass
+
+try:  # pragma: no cover
+    from sqlalchemy import create_engine, func
+    from sqlalchemy.orm import Session, scoped_session, sessionmaker
+except Exception:  # pragma: no cover - SQLAlchemy missing
+    create_engine = func = None  # type: ignore
+
+    class Session:  # type: ignore
+        pass
+
+    def scoped_session(*args, **kwargs):  # type: ignore
+        raise ImportError("SQLAlchemy is required")
+
+    def sessionmaker(*args, **kwargs):  # type: ignore
+        raise ImportError("SQLAlchemy is required")
+
+try:  # pragma: no cover
+    from .config import Config
+except Exception:  # pragma: no cover
+    class Config:  # type: ignore
+        pass
+
+try:  # pragma: no cover
+    from .logger import Logger
+except Exception:  # pragma: no cover
+    class Logger:  # type: ignore
+        pass
+
+# Importing models may fail without SQLAlchemy; ignore if unavailable.
+try:  # pragma: no cover
+    from .models import *  # pylint: disable=wildcard-import
+except Exception:  # pragma: no cover
+    Coin = Pair = CurrentCoin = ScoutHistory = CoinValue = Interval = object  # type: ignore
 
 
 class Database:

@@ -1,10 +1,25 @@
-"""
-Unit tests for the DailyLossManager class.
-"""
+"""Unit tests for the DailyLossManager class."""
 
+import sys
+import types
 import unittest
 from datetime import datetime, date, time, timedelta
 from unittest.mock import Mock, patch, MagicMock
+
+# Provide a minimal stub for the optional socketio dependency
+socketio_stub = types.ModuleType("socketio")
+socketio_stub.Client = object
+exceptions_module = types.ModuleType("socketio.exceptions")
+
+
+class ConnectionError(Exception):
+    """Fallback ConnectionError for socketio stub."""
+
+
+exceptions_module.ConnectionError = ConnectionError
+sys.modules.setdefault("socketio.exceptions", exceptions_module)
+socketio_stub.exceptions = exceptions_module
+sys.modules.setdefault("socketio", socketio_stub)
 
 from binance_trade_bot.database import Database
 from binance_trade_bot.logger import Logger
@@ -148,10 +163,10 @@ class TestDailyLossManager(unittest.TestCase):
         self.daily_loss_manager._create_risk_event = Mock()
         
         result = self.daily_loss_manager.update_portfolio_value(self.mock_session)
-        
+
         self.assertTrue(result)
         mock_tracking.update_portfolio_value.assert_called_once_with(8000.0)
-    
+
     @patch('binance_trade_bot.risk_management.daily_loss_manager.datetime')
     def test_update_portfolio_value_halted(self, mock_datetime):
         """Test portfolio value update when trading is halted."""
@@ -167,9 +182,26 @@ class TestDailyLossManager(unittest.TestCase):
         self.mock_session.query.return_value.filter.return_value.first.return_value = mock_tracking
         
         result = self.daily_loss_manager.update_portfolio_value(self.mock_session)
-        
+
         self.assertFalse(result)
         self.daily_loss_manager._create_risk_event.assert_called_once_with(self.mock_session, mock_tracking)
+
+    @patch('binance_trade_bot.risk_management.daily_loss_manager.datetime')
+    def test_update_portfolio_value_threshold_exceeded(self, mock_datetime):
+        """Test that exceeding the loss threshold halts trading and logs an event."""
+        test_date = datetime(2025, 8, 5, 10, 0, 0)
+        mock_datetime.now.return_value = test_date
+
+        tracking = DailyLossTracking(test_date, 10000.0, max_daily_loss_percentage=5.0)
+        self.daily_loss_manager.get_or_create_daily_tracking = Mock(return_value=tracking)
+        self.daily_loss_manager._calculate_current_portfolio_value = Mock(return_value=9000.0)
+        self.daily_loss_manager._create_risk_event = Mock()
+
+        result = self.daily_loss_manager.update_portfolio_value(self.mock_session)
+
+        self.assertFalse(result)
+        self.assertTrue(tracking.trading_halted)
+        self.daily_loss_manager._create_risk_event.assert_called_once_with(self.mock_session, tracking)
     
     @patch('binance_trade_bot.risk_management.daily_loss_manager.datetime')
     def test_update_portfolio_value_disabled_protection(self, mock_datetime):
@@ -429,9 +461,29 @@ class TestDailyLossManager(unittest.TestCase):
         self.mock_session.query.return_value.first.return_value = None
         
         self.daily_loss_manager._create_risk_event(self.mock_session, mock_tracking)
-        
+
         # Verify risk event creation with default pair
         self.mock_session.add.assert_called()
+
+    def test_create_risk_event_with_logger(self):
+        """Test creating a risk event using RiskEventLogger."""
+        mock_tracking = Mock()
+        mock_tracking.daily_loss_percentage = 6.0
+        mock_tracking.max_daily_loss_percentage = 5.0
+
+        mock_pair = Mock()
+        mock_pair.from_coin = Coin("BTC", True)
+        self.mock_session.query.return_value.first.return_value = mock_pair
+
+        mock_logger = Mock()
+        manager = DailyLossManager(
+            self.mock_database, self.mock_logger, self.test_config, risk_event_logger=mock_logger
+        )
+
+        manager._create_risk_event(self.mock_session, mock_tracking)
+
+        mock_logger.log_risk_event.assert_called_once()
+        self.mock_session.add.assert_not_called()
 
 
 if __name__ == '__main__':

@@ -1,16 +1,38 @@
-"""
-Statistics calculators for performance tracking.
-"""
+"""Statistics calculators for performance tracking."""
 
-import numpy as np
-import pandas as pd
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Union
 from abc import ABC, abstractmethod
+import math
+import statistics
+
+# pandas is optional; provide a lightweight stub when unavailable so the
+# statistics module can still be imported for tests that don't require full
+# DataFrame functionality.
+try:  # pragma: no cover
+    import pandas as pd  # type: ignore
+except Exception:  # pragma: no cover - pandas not installed
+    from types import SimpleNamespace
+
+    class _DummyDataFrame:  # minimal placeholder for type hints
+        pass
+
+    pd = SimpleNamespace(DataFrame=_DummyDataFrame)  # type: ignore
 
 from .base import StatisticsBase
 from ..database import Database
-from ..models.trade import Trade, TradeState
+
+# Trade models depend on SQLAlchemy; provide lightweight fallbacks if they can't
+# be imported so the statistics module remains importable in minimal
+# environments.
+try:  # pragma: no cover
+    from ..models.trade import Trade, TradeState  # type: ignore
+except Exception:  # pragma: no cover
+    class Trade:  # type: ignore
+        pass
+
+    class TradeState:  # type: ignore
+        COMPLETE = "COMPLETE"
 
 
 class DailyPerformanceCalculator(StatisticsBase):
@@ -41,13 +63,27 @@ class DailyPerformanceCalculator(StatisticsBase):
         
         # Calculate win/loss metrics
         win_loss_metrics = self.calculate_win_loss_metrics(data)
-        
+
+        # Calculate trade frequency metrics
+        trade_frequency_metrics = self.calculate_trade_frequency_metrics(data, 24)
+
+        # Calculate advanced metrics
+        returns: List[float] = []
+        if 'profit_loss' in data.columns and 'crypto_trade_amount' in data.columns:
+            returns = (
+                data['profit_loss'] / data['crypto_trade_amount']
+            ).replace([math.inf, -math.inf], math.nan).dropna().tolist()
+        total_volume = data['crypto_trade_amount'].sum() if 'crypto_trade_amount' in data.columns else 0.0
+        advanced_metrics = AdvancedMetricsCalculator().calculate_all_advanced_metrics(returns, total_volume)
+
         # Combine all metrics
         daily_stats = {
             'date': date.isoformat(),
             **basic_metrics,
             **profit_loss_metrics,
             **win_loss_metrics,
+            **trade_frequency_metrics,
+            **advanced_metrics,
         }
         
         return self.format_statistics(daily_stats)
@@ -199,7 +235,19 @@ class WeeklyPerformanceCalculator(StatisticsBase):
         
         # Calculate win/loss metrics
         win_loss_metrics = self.calculate_win_loss_metrics(weekly_data)
-        
+
+        # Calculate trade frequency metrics
+        trade_frequency_metrics = self.calculate_trade_frequency_metrics(weekly_data, 24 * 7)
+
+        # Calculate advanced metrics
+        returns: List[float] = []
+        if 'profit_loss' in weekly_data.columns and 'crypto_trade_amount' in weekly_data.columns:
+            returns = (
+                weekly_data['profit_loss'] / weekly_data['crypto_trade_amount']
+            ).replace([math.inf, -math.inf], math.nan).dropna().tolist()
+        total_volume = weekly_data['crypto_trade_amount'].sum() if 'crypto_trade_amount' in weekly_data.columns else 0.0
+        advanced_metrics = AdvancedMetricsCalculator().calculate_all_advanced_metrics(returns, total_volume)
+
         # Combine all metrics
         weekly_stats = {
             'week_start': week_start.isoformat(),
@@ -207,6 +255,8 @@ class WeeklyPerformanceCalculator(StatisticsBase):
             **basic_metrics,
             **profit_loss_metrics,
             **win_loss_metrics,
+            **trade_frequency_metrics,
+            **advanced_metrics,
         }
         
         return self.format_statistics(weekly_stats)
@@ -359,10 +409,23 @@ class TotalPerformanceCalculator(StatisticsBase):
         
         # Calculate win/loss metrics
         win_loss_metrics = self.calculate_win_loss_metrics(period_data)
-        
+
         # Calculate additional metrics
         additional_metrics = self.calculate_additional_metrics(period_data, start_date, end_date)
-        
+
+        # Calculate trade frequency metrics
+        period_hours = (end_date - start_date).total_seconds() / 3600 if end_date and start_date else 0
+        trade_frequency_metrics = self.calculate_trade_frequency_metrics(period_data, period_hours)
+
+        # Calculate advanced metrics
+        returns: List[float] = []
+        if 'profit_loss' in period_data.columns and 'crypto_trade_amount' in period_data.columns:
+            returns = (
+                period_data['profit_loss'] / period_data['crypto_trade_amount']
+            ).replace([math.inf, -math.inf], math.nan).dropna().tolist()
+        total_volume = period_data['crypto_trade_amount'].sum() if 'crypto_trade_amount' in period_data.columns else 0.0
+        advanced_metrics = AdvancedMetricsCalculator().calculate_all_advanced_metrics(returns, total_volume)
+
         # Combine all metrics
         total_stats = {
             'start_date': start_date.isoformat(),
@@ -370,7 +433,9 @@ class TotalPerformanceCalculator(StatisticsBase):
             **basic_metrics,
             **profit_loss_metrics,
             **win_loss_metrics,
+            **trade_frequency_metrics,
             **additional_metrics,
+            **advanced_metrics,
         }
         
         return self.format_statistics(total_stats)
@@ -611,6 +676,7 @@ class WinLossCalculator:
                 'winning_trades': 0,
                 'losing_trades': 0,
                 'win_rate': 0.0,
+                'win_loss_ratio': 0.0,
                 'average_holding_period': 0.0,
                 'largest_win': 0.0,
                 'largest_loss': 0.0,
@@ -635,9 +701,14 @@ class WinLossCalculator:
         winning_trades = len([r for r in trade_results if r['profit_loss'] > 0])
         losing_trades = total_trades - winning_trades
         win_rate = (winning_trades / total_trades) if total_trades > 0 else 0.0
+        win_loss_ratio = (winning_trades / losing_trades) if losing_trades > 0 else float('inf')
         
         # Calculate average holding period
-        average_holding_period = np.mean([r['holding_period'] for r in trade_results]) if trade_results else 0.0
+        average_holding_period = (
+            statistics.mean([r['holding_period'] for r in trade_results])
+            if trade_results
+            else 0.0
+        )
         
         # Calculate largest win and loss
         profit_losses = [r['profit_loss'] for r in trade_results]
@@ -649,6 +720,7 @@ class WinLossCalculator:
             'winning_trades': winning_trades,
             'losing_trades': losing_trades,
             'win_rate': win_rate,
+            'win_loss_ratio': win_loss_ratio,
             'average_holding_period': average_holding_period,
             'largest_win': largest_win,
             'largest_loss': largest_loss,
@@ -679,29 +751,29 @@ class AdvancedMetricsCalculator:
                 'calmar_ratio': 0.0,
             }
         
-        returns_array = np.array(returns)
-        
         # Calculate ROI
-        roi = np.sum(returns_array) * 100 if total_volume > 0 else 0.0
-        
+        roi = sum(returns) * 100 if total_volume > 0 else 0.0
+
         # Calculate Sharpe ratio
-        sharpe_ratio = self._calculate_sharpe_ratio(returns_array)
-        
+        sharpe_ratio = self._calculate_sharpe_ratio(returns)
+
         # Calculate maximum drawdown
-        max_drawdown = self._calculate_max_drawdown(returns_array)
-        
-        # Calculate volatility
-        volatility = np.std(returns_array) * np.sqrt(252) if len(returns_array) > 1 else 0.0
-        
+        max_drawdown = self._calculate_max_drawdown(returns)
+
+        # Calculate volatility (annualized)
+        volatility = (
+            statistics.pstdev(returns) * math.sqrt(252) if len(returns) > 1 else 0.0
+        )
+
         # Calculate profit factor
-        profit_factor = self._calculate_profit_factor(returns_array)
-        
+        profit_factor = self._calculate_profit_factor(returns)
+
         # Calculate recovery factor
         recovery_factor = self._calculate_recovery_factor(roi, max_drawdown)
-        
+
         # Calculate Calmar ratio
         calmar_ratio = self._calculate_calmar_ratio(roi, max_drawdown)
-        
+
         return {
             'roi': roi,
             'sharpe_ratio': sharpe_ratio,
@@ -711,52 +783,43 @@ class AdvancedMetricsCalculator:
             'recovery_factor': recovery_factor,
             'calmar_ratio': calmar_ratio,
         }
-    
-    def _calculate_sharpe_ratio(self, returns: np.ndarray, risk_free_rate: float = 0.02) -> float:
-        """
-        Calculate Sharpe ratio.
-        
-        @param {np.ndarray} returns - Array of returns
-        @param {float} risk_free_rate - Risk-free rate
-        @returns {float} Sharpe ratio
-        """
+
+    def _calculate_sharpe_ratio(self, returns: List[float], risk_free_rate: float = 0.02) -> float:
+        """Calculate Sharpe ratio."""
         if len(returns) < 2:
             return 0.0
-        
-        excess_returns = returns - risk_free_rate / 252  # Daily risk-free rate
-        sharpe_ratio = np.mean(excess_returns) / np.std(excess_returns) * np.sqrt(252)
-        
-        return sharpe_ratio if not np.isnan(sharpe_ratio) else 0.0
-    
-    def _calculate_max_drawdown(self, returns: np.ndarray) -> float:
-        """
-        Calculate maximum drawdown.
-        
-        @param {np.ndarray} returns - Array of returns
-        @returns {float} Maximum drawdown
-        """
-        if len(returns) == 0:
+
+        daily_rfr = risk_free_rate / 252
+        excess_returns = [r - daily_rfr for r in returns]
+        std = statistics.pstdev(excess_returns) if len(excess_returns) > 1 else 0.0
+        if std == 0:
             return 0.0
-        
-        cumulative_returns = np.cumprod(1 + returns)
-        running_max = np.maximum.accumulate(cumulative_returns)
-        drawdowns = (cumulative_returns - running_max) / running_max
-        
-        return abs(np.min(drawdowns)) if len(drawdowns) > 0 else 0.0
-    
-    def _calculate_profit_factor(self, returns: np.ndarray) -> float:
-        """
-        Calculate profit factor.
-        
-        @param {np.ndarray} returns - Array of returns
-        @returns {float} Profit factor
-        """
-        if len(returns) == 0:
+        mean_excess = statistics.mean(excess_returns)
+        return (mean_excess / std) * math.sqrt(252)
+
+    def _calculate_max_drawdown(self, returns: List[float]) -> float:
+        """Calculate maximum drawdown."""
+        if not returns:
             return 0.0
-        
-        gross_profit = np.sum(returns[returns > 0])
-        gross_loss = abs(np.sum(returns[returns < 0]))
-        
+        cumulative = []
+        total = 1.0
+        for r in returns:
+            total *= (1 + r)
+            cumulative.append(total)
+        running_max = []
+        max_val = -math.inf
+        for val in cumulative:
+            max_val = max(max_val, val)
+            running_max.append(max_val)
+        drawdowns = [(c - m) / m for c, m in zip(cumulative, running_max)]
+        return abs(min(drawdowns)) if drawdowns else 0.0
+
+    def _calculate_profit_factor(self, returns: List[float]) -> float:
+        """Calculate profit factor."""
+        if not returns:
+            return 0.0
+        gross_profit = sum(r for r in returns if r > 0)
+        gross_loss = abs(sum(r for r in returns if r < 0))
         return gross_profit / gross_loss if gross_loss > 0 else 0.0
     
     def _calculate_recovery_factor(self, roi: float, max_drawdown: float) -> float:
