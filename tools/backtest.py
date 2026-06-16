@@ -26,7 +26,10 @@ def _simulate(df, st_len, st_mult, adx_period, adx_thresh,
         price = close[i]
         ex.mark(coin, price)
         pos = ex.position(coin)
-        desired = sig[i]
+        # Act on the PREVIOUS bar's completed signal/stop, fill at this bar's close.
+        # Using sig[i]/st_line[i] here would be look-ahead bias (deciding and filling on the
+        # same close you used to compute the signal). i==0 has no prior bar -> stay flat.
+        desired = int(sig[i - 1]) if i > 0 else 0
 
         if pos is not None:
             ex.charge_funding(coin)
@@ -37,7 +40,7 @@ def _simulate(df, st_len, st_mult, adx_period, adx_thresh,
                 trade_pnls.append(ex.close(coin, price))
                 pos = None
             if desired != 0:
-                stop = st_line[i]
+                stop = st_line[i - 1]
                 stop_dist = abs(price - stop) / price
                 if stop_dist > 1e-6:
                     equity = ex.equity()
