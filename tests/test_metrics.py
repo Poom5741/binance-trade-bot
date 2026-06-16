@@ -24,3 +24,15 @@ def test_win_rate():
 
 def test_win_rate_empty():
     assert win_rate([]) == 0.0
+
+
+from bot.metrics import stability_pick
+
+
+def test_stability_pick_prefers_plateau_over_spike():
+    grid = np.full((5, 5), 1.0)
+    grid[0, 0] = 100.0
+    grid[2, 2] = 5.0
+    grid[1:4, 1:4] = 5.0
+    i, j, score = stability_pick(grid, k=1.5)
+    assert (i, j) == (2, 2)

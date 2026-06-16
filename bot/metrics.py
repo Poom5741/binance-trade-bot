@@ -33,3 +33,18 @@ def win_rate(trade_pnls):
         return 0.0
     wins = sum(1 for p in trade_pnls if p > 0)
     return wins / len(trade_pnls)
+
+
+def stability_pick(grid, k=1.5):
+    """Pick the 3x3-neighborhood center maximizing mean - k*std. Returns (i, j, score).
+    Only interior cells (with a full 3x3 window) are candidates."""
+    grid = np.asarray(grid, dtype=float)
+    rows, cols = grid.shape
+    best = (-np.inf, 0, 0)
+    for i in range(1, rows - 1):
+        for j in range(1, cols - 1):
+            window = grid[i - 1:i + 2, j - 1:j + 2]
+            score = window.mean() - k * window.std()
+            if score > best[0]:
+                best = (score, i, j)
+    return best[1], best[2], best[0]
