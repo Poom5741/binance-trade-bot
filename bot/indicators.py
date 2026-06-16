@@ -46,3 +46,21 @@ def supertrend(high, low, close, length=10, mult=3.0):
         line[i] = lower[i] if trend[i] == 1 else upper[i]
     line[0] = lower[0]
     return trend, line
+
+
+def dmi_adx(high, low, close, period=14):
+    high, low, close = map(lambda a: np.asarray(a, dtype=float), (high, low, close))
+    n = len(close)
+    up_move = np.zeros(n)
+    dn_move = np.zeros(n)
+    up_move[1:] = high[1:] - high[:-1]
+    dn_move[1:] = low[:-1] - low[1:]
+    plus_dm = np.where((up_move > dn_move) & (up_move > 0), up_move, 0.0)
+    minus_dm = np.where((dn_move > up_move) & (dn_move > 0), dn_move, 0.0)
+    atr = wilder(true_range(high, low, close), period)
+    atr_safe = np.where(atr == 0, 1e-12, atr)
+    plus_di = 100.0 * wilder(plus_dm, period) / atr_safe
+    minus_di = 100.0 * wilder(minus_dm, period) / atr_safe
+    dx = 100.0 * np.abs(plus_di - minus_di) / (plus_di + minus_di + 1e-12)
+    adx = wilder(dx, period)
+    return plus_di, minus_di, adx
