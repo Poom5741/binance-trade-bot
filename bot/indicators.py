@@ -23,3 +23,26 @@ def wilder(x, period):
     for i in range(period, len(x)):
         out[i] = (out[i - 1] * (period - 1) + x[i]) / period
     return out
+
+
+def supertrend(high, low, close, length=10, mult=3.0):
+    high, low, close = map(lambda a: np.asarray(a, dtype=float), (high, low, close))
+    n = len(close)
+    hl2 = (high + low) / 2.0
+    atr = wilder(true_range(high, low, close), length)
+    upper = hl2 + mult * atr
+    lower = hl2 - mult * atr
+    trend = np.ones(n, dtype=int)
+    line = np.zeros(n, dtype=float)
+    for i in range(1, n):
+        lower[i] = max(lower[i], lower[i - 1]) if close[i - 1] > lower[i - 1] else lower[i]
+        upper[i] = min(upper[i], upper[i - 1]) if close[i - 1] < upper[i - 1] else upper[i]
+        if trend[i - 1] == -1 and close[i] > upper[i - 1]:
+            trend[i] = 1
+        elif trend[i - 1] == 1 and close[i] < lower[i - 1]:
+            trend[i] = -1
+        else:
+            trend[i] = trend[i - 1]
+        line[i] = lower[i] if trend[i] == 1 else upper[i]
+    line[0] = lower[0]
+    return trend, line
